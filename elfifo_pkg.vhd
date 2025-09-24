@@ -13,7 +13,7 @@ package elfifo_pkg is
         ud  : in  std_logic;
         clk    : in  std_logic;
         enable    : in  std_logic;
-        dc_out: out std_logic_vector(M-1 downto 0)
+        cptr: out std_logic_vector(M-1 downto 0)
     );
     end component dcpt_m;
 

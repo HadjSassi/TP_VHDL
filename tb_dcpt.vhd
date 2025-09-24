@@ -17,7 +17,7 @@ architecture tb of tb_dcpt_m is
   signal reset  : std_logic := '0';
   signal enable : std_logic := '0';
   signal ud     : std_logic := '1'; 
-  signal dc_out      : std_logic_vector(M_TB-1 downto 0);
+  signal cptr      : std_logic_vector(M_TB-1 downto 0);
 
   -- ref module
   signal ref_cnt : unsigned(M_TB-1 downto 0) := (others => '0');
@@ -36,7 +36,7 @@ begin
       reset  => reset,
       enable => enable,
       ud     => ud,
-      dc_out      => dc_out
+      cptr      => cptr
     );
 
   --------------------------------------------------------------------
@@ -61,8 +61,8 @@ begin
   check_proc : process(clk)
   begin
     if rising_edge(clk) then
-        assert dc_out = std_logic_vector(ref_cnt)
-        report "Mismatch: dc_out=" & integer'image(to_integer(unsigned(dc_out)))
+        assert cptr = std_logic_vector(ref_cnt)
+        report "Mismatch: cptr=" & integer'image(to_integer(unsigned(cptr)))
             & " ref="    & integer'image(to_integer(ref_cnt))
     severity error;
 
