@@ -61,10 +61,11 @@ begin
   check_proc : process(clk)
   begin
     if rising_edge(clk) then
-      assert dc_out = std_logic_vector(ref_cnt)
-        report "Mismatch: dc_out=" & to_hstring(dc_out)
-             & " ref=" & to_hstring(std_logic_vector(ref_cnt))
-        severity error;
+        assert dc_out = std_logic_vector(ref_cnt)
+        report "Mismatch: dc_out=" & integer'image(to_integer(unsigned(dc_out)))
+            & " ref="    & integer'image(to_integer(ref_cnt))
+    severity error;
+
     end if;
   end process;
 
@@ -112,9 +113,9 @@ begin
     wait for 8*CLK_PERIOD;
 
     -- end test
-    report "Testbench fini sans erreurs." severity note;
-    std.env.stop;  -- endsimulation
-    wait;
+	report "Testbench fini sans erreurs." severity note;
+	assert false report "Erreur. Testbench fini." severity failure;
+	wait;
   end process;
 
 end architecture;

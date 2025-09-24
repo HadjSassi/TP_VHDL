@@ -1,5 +1,6 @@
 library IEEE;
 use IEEE.std_logic_1164.all;
+use ieee.numeric_std.all;
 
 package elfifo_pkg is
 
@@ -12,7 +13,7 @@ package elfifo_pkg is
         ud  : in  std_logic;
         clk    : in  std_logic;
         enable    : in  std_logic;
-        dc_out: out std_logic_vector(M-1 downto 0);
+        dc_out: out std_logic_vector(M-1 downto 0)
     );
     end component dcpt_m;
 
@@ -20,5 +21,5 @@ end package elfifo_pkg;
 
 
 package body elfifo_pkg is
-    
+
 end package body;
