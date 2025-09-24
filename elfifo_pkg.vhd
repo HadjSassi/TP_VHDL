@@ -17,6 +17,21 @@ package elfifo_pkg is
     );
     end component dcpt_m;
 
+    component fastslow is
+    generic ( 
+        M : natural := 8 
+    );
+    port (
+        Reset    : in  std_logic;
+        CLK      : in  std_logic;
+        incread  : in  std_logic;
+        incwrite : in  std_logic;
+        fast     : out std_logic;
+        slow     : out std_logic
+    );
+    end component fastslow;
+
+
 end package elfifo_pkg;
 
 
