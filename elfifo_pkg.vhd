@@ -56,6 +56,61 @@ package elfifo_pkg is
     );
     end component GENHL;
 
+    component complement_a_2 is
+    generic (
+        N : integer := 8
+    );
+    port (
+        nombre : in STD_LOGIC_VECTOR (N-1 downto 0);
+        sortie : out STD_LOGIC_VECTOR (N-1 downto 0)
+    );
+    end component complement_a_2;
+
+    component genadr is
+    generic (
+        M : natural := 4 
+    );
+    port (
+        reset    : in  std_logic;
+        clk      : in  std_logic;
+        incwrite : in  std_logic;
+        incread  : in  std_logic;
+        selread  : in  std_logic;
+        adrg     : out std_logic_vector(M-1 downto 0)
+    );
+    end component genadr;
+
+    component reg_n is
+    generic (
+        N : natural := 8
+    );
+    port (
+        reset : in std_logic;
+        clk   : in std_logic;
+        ent   : in std_logic_vector(N-1 downto 0);
+        sort  : out std_logic_vector(N-1 downto 0)
+    );
+    end component reg_n;
+
+    component seq is
+    port (
+        clk      : in  std_logic;
+        reset    : in  std_logic;
+        enread   : in  std_logic;
+        enwrite  : in  std_logic;
+        req      : in  std_logic;
+
+        ack      : out std_logic;
+        rw_n     : out std_logic;
+        oe       : out std_logic;
+        incwrite : out std_logic;
+        incread  : out std_logic;
+        hl       : out std_logic;
+        selread  : out std_logic;
+        cs_n     : out std_logic
+    );
+    end component seq;
+
 end package elfifo_pkg;
 
 
