@@ -74,18 +74,31 @@ end loop;
 end check_setup;
 
 procedure check_hold(
-		signal clk 		: in std_logic;
-		signal din 		: in std_logic_vector;
-			t_hold 	: in time;
-			severite	: in severity_level:= warning;
-			hdeb 		: in time := time'low;
-			hfin		: in time := time'high ) is 
-begin
---> A completer		--> A completer--> A completer--> A completer 
--- voir annexe ŽnoncŽ de TP
-End check_hold;
+        signal clk     : in std_logic;
+        signal din     : in std_logic_vector;
+        t_hold         : in time;
+        severite       : in severity_level := warning;
+        hdeb           : in time := time'low;
+        hfin           : in time := time'high
+    ) is
+        variable t : time;
+    begin
+        loop
+            wait until clk = '1';
+            t := now;
+            if t >= hdeb and t <= hfin then
+                if din'event = false then
+                    wait on din for t_hold;
+                end if;
+                assert din'event = false or (now - t) >= t_hold
+                    report "temps de hold non respecte" severity severite;
+            elsif t > hfin then
+                wait;
+            end if;
+        end loop;
+    end check_hold;
 
-End CHECK_PKG;
+end CHECK_PKG;
 --------------------------------------------------------------------------
 
 
