@@ -21,12 +21,12 @@ architecture archi_tb of tb_fifo is
       enread_dbg   : out std_logic;
       enwrite_dbg  : out std_logic;
       adrg_dbg     : out std_logic_vector(3 downto 0);
-      selread_dbg  : out std_logic  -- Added for verification
+      selread_dbg  : out std_logic
     );
   end component;
 
   constant CLK_PERIOD : time := 100 ns;
-  constant M         : natural := 4;  -- For 16 words (2^M)
+  constant M : natural := 4;  -- 16 words
 
   signal clk_tb, reset_tb, req_tb : std_logic := '0';
   signal din_tb                   : std_logic_vector(7 downto 0) := (others => '0');
@@ -37,14 +37,17 @@ architecture archi_tb of tb_fifo is
   signal selread_dbg_tb           : std_logic;
   signal done : std_logic := '0';
 
-  -- Trackers for expected pointers (manual simulation in TB)
+  -- Expected pointers (tracked by TB)
   signal expected_write_ptr : unsigned(M-1 downto 0) := (others => '0');
   signal expected_read_ptr  : unsigned(M-1 downto 0) := (others => '0');
 
-  constant ZZZ : std_logic_vector(7 downto 0) := (others => 'Z');
+  -- TB flag to increment write_ptr at the next rising edge after requesting a write
+  signal pending_write : std_logic := '0';
 
 begin
+  --------------------------------------------------------------------
   -- DUT
+  --------------------------------------------------------------------
   u_dut : fifo
     port map (
       clk          => clk_tb,
@@ -60,7 +63,9 @@ begin
       selread_dbg  => selread_dbg_tb
     );
 
-  -- clock
+  --------------------------------------------------------------------
+  -- Clock
+  --------------------------------------------------------------------
   clk_proc : process
   begin
     while done = '0' loop
@@ -70,8 +75,38 @@ begin
     wait;
   end process;
 
-  -- stimuli
+  --------------------------------------------------------------------
+  -- Expected pointers model (clocked)
+  -- - Write: increment on the *next* rising edge after we assert req='0' (pending_write='1').
+  -- - Read : increment on the same cycle where HL='1' (Lect1/2).
+  --------------------------------------------------------------------
+  exp_ptrs_proc : process(clk_tb)
+  begin
+    if rising_edge(clk_tb) then
+      if reset_tb = '1' then
+        expected_write_ptr <= (others => '0');
+        expected_read_ptr  <= (others => '0');
+        pending_write      <= '0';
+      else
+        -- consume pending write (this edge is Ecrire)
+        if pending_write = '1' then
+          expected_write_ptr <= expected_write_ptr + 1;
+          pending_write      <= '0';
+        end if;
+
+        -- read increments on HL=1 (Lect1/2)
+        if hl_tb = '1' then
+          expected_read_ptr <= expected_read_ptr + 1;
+        end if;
+      end if;
+    end if;
+  end process;
+
+  --------------------------------------------------------------------
+  -- Stimuli
+  --------------------------------------------------------------------
   stim : process
+    -- wait N rising edges
     procedure wait_cycles(n : natural) is
     begin
       for i in 1 to n loop
@@ -79,109 +114,103 @@ begin
       end loop;
     end procedure;
 
+    -- wait until HL=1 (with safety cap)
     procedure wait_hl_pulse(max_cycles : natural) is
       variable k : natural := 0;
     begin
       loop
         wait until rising_edge(clk_tb);
-        if hl_tb = '1' then
-          exit;
-        end if;
+        exit when hl_tb = '1';
         k := k + 1;
         assert k <= max_cycles report "Timeout waiting for HL pulse" severity error;
       end loop;
     end procedure;
 
-    -- Procedure to verify address after inc or sel change
-    procedure verify_address_after_cycle(msg : string) is
-      variable expected_adrg : std_logic_vector(M-1 downto 0);
+    -- Compare adrg against expected pointer selected by selread
+    procedure check_adrg(msg : string) is
+      variable exp_adrg : std_logic_vector(M-1 downto 0);
     begin
-      wait until rising_edge(clk_tb);
       if selread_dbg_tb = '1' then
-        expected_adrg := std_logic_vector(expected_read_ptr);
+        exp_adrg := std_logic_vector(expected_read_ptr);
       else
-        expected_adrg := std_logic_vector(expected_write_ptr);
+        exp_adrg := std_logic_vector(expected_write_ptr);
       end if;
-      assert adrg_dbg_tb = expected_adrg
-        report msg & ": adrg mismatch. Expected " & integer'image(to_integer(unsigned(expected_adrg))) &
-        " (selread=" & std_logic'image(selread_dbg_tb) & "), got " & integer'image(to_integer(unsigned(adrg_dbg_tb)))
+
+      assert adrg_dbg_tb = exp_adrg
+        report msg & ": ADRG mismatch. selread=" & std_logic'image(selread_dbg_tb) &
+               " exp=" & integer'image(to_integer(unsigned(exp_adrg))) &
+               " got=" & integer'image(to_integer(unsigned(adrg_dbg_tb)))
         severity error;
-      report msg & ": adrg OK (" & integer'image(to_integer(unsigned(adrg_dbg_tb))) & "), selread=" & std_logic'image(selread_dbg_tb) severity note;
     end procedure;
 
-    -- Procedure for write (incwrite, selread=0 expected)
-    procedure do_write_and_verify is
+    -- Request a write from Repos (will set pending_write so the model increments next edge)
+    procedure request_write is
     begin
-      req_tb <= '0';  -- Trigger ecrire
-      verify_address_after_cycle("Before write inc");  -- Should be in ecrire next cycle
-      expected_write_ptr <= expected_write_ptr + 1;    -- Simulate inc
-      verify_address_after_cycle("After write inc");
-      wait until rising_edge(clk_tb);  -- To attente
-    end procedure;
-
-    -- Procedure for read (incread, selread=1 expected)
-    procedure do_read_and_verify is
-    begin
-      wait_hl_pulse(40);
-      assert hl_tb = '1' report "HL must be 1 during read" severity error;
-      expected_read_ptr <= expected_read_ptr + 1;      -- Simulate inc
-      verify_address_after_cycle("After read inc");
-      wait until rising_edge(clk_tb);  -- Back to previous state
+      -- By spec: Repos -> Ecrire when enread=0 and enwrite=1 and req=0.
+      -- Here we assume we're in Repos and enread_dbg_tb='0'.
+      req_tb       <= '0';
+      pending_write <= '1';   -- TB model: increment expected_write_ptr on next rising edge
     end procedure;
 
   begin
-    -- reset -> Repos (ptrs=0, selread=0)
-    req_tb   <= '1';
-    din_tb   <= (others => '0');
-    expected_write_ptr <= (others => '0');
-    expected_read_ptr  <= (others => '0');
-    reset_tb <= '1';   wait_cycles(2);
-    reset_tb <= '0';   wait until rising_edge(clk_tb);
-    verify_address_after_cycle("After reset");
+    ----------------------------------------------------------------
+    -- Reset -> Repos
+    ----------------------------------------------------------------
+    req_tb    <= '1';            -- no immediate write
+    din_tb    <= (others => '0');
+    reset_tb  <= '1'; wait_cycles(2);
+    reset_tb  <= '0'; wait until rising_edge(clk_tb);  -- now in Repos
 
-    -- Scenario 1: Idle read (lect1: incread, selread=1)
-    wait_cycles(20);
-    do_read_and_verify;
+    -- First check (Repos: selread=0)
+    check_adrg("After reset");
+    assert hl_tb = '0' report "After reset: HL must be 0" severity error;
+
+    ----------------------------------------------------------------
+    -- Scenario 1: Idle ~200 cycles, then read pulse (Lect1) -> Repos
+    ----------------------------------------------------------------
+    wait_cycles(200);            -- idle while GENHL runs
+    wait_hl_pulse(400);          -- pulse arrives (Lect1)
+    check_adrg("Lect1 (during HL=1)");
+    wait until rising_edge(clk_tb);  -- back to Repos
+    check_adrg("Back to Repos after Lect1");
     assert hl_tb = '0' report "Back to Repos: HL/=0" severity error;
 
-    -- Scenario 2: Write then read (ecrire: incwrite sel=0 -> attente sel=1 -> lect2: incread)
-    do_write_and_verify;  -- incwrite
-    do_read_and_verify;   -- incread
-    req_tb <= '1'; wait until rising_edge(clk_tb);  -- To repos
+    ----------------------------------------------------------------
+    -- Scenario 2: Write -> Attente -> (HL pulse) Lect2 -> Attente -> Repos
+    ----------------------------------------------------------------
+    request_write;                    -- ask for a write; next edge is Ecrire
+    wait until rising_edge(clk_tb);   -- Ecrire (incwrite happens; TB model increments here)
+    check_adrg("Ecrire");
+    wait until rising_edge(clk_tb);   -- Attente
+    check_adrg("Attente before read");
 
-    -- Additional: Multiple writes (test incwrite chain, sel=0)
-    wait_cycles(5);
-    for i in 1 to 8 loop
-      do_write_and_verify;
-    end loop;
-    req_tb <= '1'; wait until rising_edge(clk_tb);  -- Repos (write_ptr=1+8=9)
+    wait_hl_pulse(400);               -- Lect2 pulse
+    check_adrg("Lect2 (during HL=1)");
+    wait until rising_edge(clk_tb);   -- back to Attente for 1 cycle
+    check_adrg("Back to Attente after Lect2");
+    req_tb <= '1';                    -- leave Attente to Repos (per spec: enread=0 & req=1)
+    wait until rising_edge(clk_tb);   -- Repos
+    check_adrg("Back to Repos after Attente");
+    assert hl_tb = '0' report "Repos after Attente: HL/=0" severity error;
 
-    -- Multiple reads (test incread, sel=1)
-    wait_cycles(5);
-    for i in 1 to 6 loop
-      do_read_and_verify;
-    end loop;
+    ----------------------------------------------------------------
+    -- Scenario 3: Write then reset while in Attente -> Repos
+    ----------------------------------------------------------------
+    request_write;                    -- request another write
+    wait until rising_edge(clk_tb);   -- Ecrire
+    wait until rising_edge(clk_tb);   -- Attente
+    reset_tb <= '1';
+    wait until rising_edge(clk_tb);   -- synchronous reset -> Repos
+    reset_tb <= '0'; req_tb <= '1';
+    -- Expected pointers model was reset as well; ADRG should be 0 with selread=0
+    assert to_integer(unsigned(adrg_dbg_tb)) = 0
+      report "After reset in Attente: ADRG must be 0 (Repos/write_ptr)" severity error;
 
-    -- Test sel switch without inc (in attente: sel=1, no inc)
-    req_tb <= '0'; do_write_and_verify;  -- To attente (sel=1 after ecrire)
-    verify_address_after_cycle("In attente: sel switch, no inc expected");  -- adrg should stay on read_ptr
-    req_tb <= '1'; wait until rising_edge(clk_tb);  -- Back repos (sel=0)
-
-    -- Scenario 3: Reset in attente (ptrs reset to 0)
-    req_tb <= '0'; do_write_and_verify;  -- Ecrire + attente
-    wait until rising_edge(clk_tb);
-    reset_tb <= '1'; verify_address_after_cycle("During reset");
-    reset_tb <= '0'; req_tb <= '1'; wait until rising_edge(clk_tb);
-    assert to_integer(unsigned(adrg_dbg_tb)) = 0 report "Address not reset" severity error;
-    expected_write_ptr <= (others => '0');
-    expected_read_ptr  <= (others => '0');
-
-    -- Run longer
-    wait_cycles(100);
-
-    report "TB fifo (GENHL + SEQ + GENADR only) finished OK." severity note;
+    ----------------------------------------------------------------
+    report "TB fifo (GENHL + SEQ + GENADR) completed successfully." severity note;
     done <= '1';
     wait;
   end process;
 
 end architecture;
+

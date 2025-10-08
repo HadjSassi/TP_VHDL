@@ -18,34 +18,40 @@ architecture behavioral of GENHL is
   signal counter         : std_logic_vector(7 downto 0);
   signal enable_counter  : std_logic := '1';
   constant MAX_COUNT     : integer := 199;  -- generates a 1-cycle pulse when counter == 199
-  --signal tick200 : std_logic;
+  signal tick200 : std_logic;
+  signal enread_r  : std_logic := '0';
+  signal enwrite_r : std_logic := '0';
 
 begin
+
+  tick200 <= '1' when unsigned(counter) = MAX_COUNT else '0'; -- clears counter with reset at 200
+  
+  ENREAD  <= enread_r;
+  ENWRITE <= enwrite_r;
+
   counter_inst : dcpt_m
     generic map ( M => 8 )
     port map (
       clk    => CLK,
-      reset  => RESET,  --reset  => (RESET or tick200)     
+      reset  => (RESET or tick200),     
       ud     => '1',
       enable => enable_counter,
       cptr   => counter
     );
 
-  --tick200 <= '1' when unsigned(counter) = MAX_COUNT else '0'; -- clears counter with reset at 200
-
   process (CLK)
   begin
     if rising_edge(CLK) then
       if RESET = '1' then
-        ENREAD  <= '0';
-        ENWRITE <= '0';
+        enread_r  <= '0';
+        enwrite_r <= '0';
       else
         if unsigned(counter) = MAX_COUNT then
-          ENREAD  <= '1';   -- 1-cycle read window
-          ENWRITE <= '0';
+          enread_r  <= '1';   -- 1-cycle read window
+          enwrite_r <= '0';
         else
-          ENREAD  <= '0';
-          ENWRITE <= '1';
+          enread_r  <= '0';
+          enwrite_r <= '1';
         end if;
       end if;
     end if;
