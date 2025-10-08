@@ -2,61 +2,53 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
+library work;
+use work.elfifo_pkg.all;  
+
 entity GENHL is
-    port (
-        CLK   : in  std_logic;
-        RESET : in  std_logic;
-        ENREAD : out std_logic;
-        ENWRITE : out std_logic
-    );
+  port (
+    CLK     : in  std_logic;
+    RESET   : in  std_logic;   
+    ENREAD  : out std_logic;
+    ENWRITE : out std_logic
+  );
 end entity GENHL;
 
 architecture behavioral of GENHL is
-    component DCPT_M is
-        generic (
-            M : natural
-        );
-        port (
-            CLK    : in  std_logic;
-            RESET  : in  std_logic;
-            UD     : in  std_logic;
-            ENABLE : in  std_logic;
-            CPTR   : out std_logic_vector(M-1 downto 0)
-        );
-    end component;
-
-    -- Signals
-    signal counter : std_logic_vector(7 downto 0);
-    signal enable_counter : std_logic := '1';
-    constant MAX_COUNT : integer := 199;
+  signal counter         : std_logic_vector(7 downto 0);
+  signal enable_counter  : std_logic := '1';
+  constant MAX_COUNT     : integer := 199;  -- generates a 1-cycle pulse when counter == 199
+  --signal tick200 : std_logic;
 
 begin
-    counter_inst : DCPT_M
-        generic map (
-            M => 8
-        )
-        port map (
-            CLK    => CLK,
-            RESET  => RESET,
-            UD     => '1',
-            ENABLE => enable_counter,
-            CPTR   => counter
-        );
+  counter_inst : dcpt_m
+    generic map ( M => 8 )
+    port map (
+      clk    => CLK,
+      reset  => RESET,  --reset  => (RESET or tick200)     
+      ud     => '1',
+      enable => enable_counter,
+      cptr   => counter
+    );
 
-    process (counter, RESET)
-    begin
-        if RESET = '1' then
-            ENREAD <= '0';
-            ENWRITE <= '0';
+  --tick200 <= '1' when unsigned(counter) = MAX_COUNT else '0'; -- clears counter with reset at 200
+
+  process (CLK)
+  begin
+    if rising_edge(CLK) then
+      if RESET = '1' then
+        ENREAD  <= '0';
+        ENWRITE <= '0';
+      else
+        if unsigned(counter) = MAX_COUNT then
+          ENREAD  <= '1';   -- 1-cycle read window
+          ENWRITE <= '0';
         else
-            if unsigned(counter) = MAX_COUNT then
-                ENREAD <= '1';
-                ENWRITE <= '0';
-            else
-                ENREAD <= '0';
-                ENWRITE <= '1';
-            end if;
+          ENREAD  <= '0';
+          ENWRITE <= '1';
         end if;
-    end process;
-
+      end if;
+    end if;
+  end process;
+  
 end architecture behavioral;
