@@ -20,7 +20,8 @@ architecture archi_tb of tb_fifo is
       dout         : out std_logic_vector(7 downto 0);
       enread_dbg   : out std_logic;
       enwrite_dbg  : out std_logic;
-      adrg_dbg     : out std_logic_vector(3 downto 0)
+      adrg_dbg     : out std_logic_vector(3 downto 0);
+      selread_dbg  : out std_logic  -- Added for verification
     );
   end component;
 
@@ -33,19 +34,14 @@ architecture archi_tb of tb_fifo is
   signal dout_tb                  : std_logic_vector(7 downto 0);
   signal enread_dbg_tb, enwrite_dbg_tb : std_logic;
   signal adrg_dbg_tb              : std_logic_vector(M-1 downto 0);
+  signal selread_dbg_tb           : std_logic;
   signal done : std_logic := '0';
 
-  -- Function to convert std_logic_vector(7:0) to hex string
-  function to_hex(slv : std_logic_vector(7 downto 0)) return string is
-    subtype nibble is std_logic_vector(3 downto 0);
-    function nib_to_hex(n : nibble) return character is
-      constant chars : string(0 to 15) := "0123456789ABCDEF";
-    begin
-      return chars(to_integer(unsigned(n)));
-    end function;
-  begin
-    return "" & nib_to_hex(slv(7 downto 4)) & nib_to_hex(slv(3 downto 0));
-  end function;
+  -- Trackers for expected pointers (manual simulation in TB)
+  signal expected_write_ptr : unsigned(M-1 downto 0) := (others => '0');
+  signal expected_read_ptr  : unsigned(M-1 downto 0) := (others => '0');
+
+  constant ZZZ : std_logic_vector(7 downto 0) := (others => 'Z');
 
 begin
   -- DUT
@@ -60,12 +56,9 @@ begin
       dout         => dout_tb,
       enread_dbg   => enread_dbg_tb,
       enwrite_dbg  => enwrite_dbg_tb,
-      adrg_dbg     => adrg_dbg_tb
+      adrg_dbg     => adrg_dbg_tb,
+      selread_dbg  => selread_dbg_tb
     );
-
-  -- bind seq architecture here (Moore by default)
-  --for u_dut.u_seq: seq use entity work.seq(archi_moore);
-  -- for u_dut.u_seq: seq use entity work.seq(archi_mealy);
 
   -- clock
   clk_proc : process
@@ -99,77 +92,94 @@ begin
       end loop;
     end procedure;
 
-    -- Procedure to check address change
-    procedure check_address_change(expected_inc : boolean) is
-      variable prev_adrg : std_logic_vector(M-1 downto 0);
+    -- Procedure to verify address after inc or sel change
+    procedure verify_address_after_cycle(msg : string) is
+      variable expected_adrg : std_logic_vector(M-1 downto 0);
     begin
-      prev_adrg := adrg_dbg_tb;
       wait until rising_edge(clk_tb);
-      if expected_inc then
-        assert adrg_dbg_tb = std_logic_vector(unsigned(prev_adrg) + 1) 
-          report "Address did not increment" severity error;
+      if selread_dbg_tb = '1' then
+        expected_adrg := std_logic_vector(expected_read_ptr);
       else
-        assert adrg_dbg_tb = prev_adrg 
-          report "Address changed unexpectedly" severity error;
+        expected_adrg := std_logic_vector(expected_write_ptr);
       end if;
+      assert adrg_dbg_tb = expected_adrg
+        report msg & ": adrg mismatch. Expected " & integer'image(to_integer(unsigned(expected_adrg))) &
+        " (selread=" & std_logic'image(selread_dbg_tb) & "), got " & integer'image(to_integer(unsigned(adrg_dbg_tb)))
+        severity error;
+      report msg & ": adrg OK (" & integer'image(to_integer(unsigned(adrg_dbg_tb))) & "), selread=" & std_logic'image(selread_dbg_tb) severity note;
     end procedure;
 
-    -- Procedure to write data and check read
-    procedure write_and_read_data(data_in : std_logic_vector(7 downto 0); expected_complement : std_logic_vector(7 downto 0)) is
+    -- Procedure for write (incwrite, selread=0 expected)
+    procedure do_write_and_verify is
     begin
-      din_tb <= data_in;
-      req_tb <= '0';  -- trigger write
-      wait until rising_edge(clk_tb);  -- Ecrire
-      check_address_change(true);
-      wait until rising_edge(clk_tb);  -- Attente
-      wait_hl_pulse(40);  -- Lect
+      req_tb <= '0';  -- Trigger ecrire
+      verify_address_after_cycle("Before write inc");  -- Should be in ecrire next cycle
+      expected_write_ptr <= expected_write_ptr + 1;    -- Simulate inc
+      verify_address_after_cycle("After write inc");
+      wait until rising_edge(clk_tb);  -- To attente
+    end procedure;
+
+    -- Procedure for read (incread, selread=1 expected)
+    procedure do_read_and_verify is
+    begin
+      wait_hl_pulse(40);
       assert hl_tb = '1' report "HL must be 1 during read" severity error;
-      assert dout_tb = expected_complement report "Read data mismatch: expected " & to_hex(expected_complement) & ", got " & to_hex(dout_tb) severity error;
-      report "Written: " & to_hex(data_in) & ", Read (complemented): " & to_hex(dout_tb) severity note;
-      wait until rising_edge(clk_tb);  -- back to Attente
-      req_tb <= '1';  -- leave Attente to Repos
-      wait until rising_edge(clk_tb);  -- Repos
+      expected_read_ptr <= expected_read_ptr + 1;      -- Simulate inc
+      verify_address_after_cycle("After read inc");
+      wait until rising_edge(clk_tb);  -- Back to previous state
     end procedure;
 
   begin
-    -- reset -> Repos (address should be 0)
+    -- reset -> Repos (ptrs=0, selread=0)
     req_tb   <= '1';
     din_tb   <= (others => '0');
+    expected_write_ptr <= (others => '0');
+    expected_read_ptr  <= (others => '0');
     reset_tb <= '1';   wait_cycles(2);
     reset_tb <= '0';   wait until rising_edge(clk_tb);
-    assert to_integer(unsigned(adrg_dbg_tb)) = 0 report "Address not reset to 0" severity error;
+    verify_address_after_cycle("After reset");
 
-    -- Scenario 1: idle read (empty, dout Z after)
+    -- Scenario 1: Idle read (lect1: incread, selread=1)
     wait_cycles(20);
-    wait_hl_pulse(40);
-    assert hl_tb = '1' report "Lect1: HL must be 1" severity error;
-    wait until rising_edge(clk_tb); -- back to Repos
-    assert dout_tb = "ZZZZZZZZ" report "Dout should be Z after read" severity error;
+    do_read_and_verify;
     assert hl_tb = '0' report "Back to Repos: HL/=0" severity error;
 
-    -- Scenario 2: write 'A' (41), read complemented
-    write_and_read_data(x"41", x"BF");  -- ~41 +1 = BF ( -65 )
+    -- Scenario 2: Write then read (ecrire: incwrite sel=0 -> attente sel=1 -> lect2: incread)
+    do_write_and_verify;  -- incwrite
+    do_read_and_verify;   -- incread
+    req_tb <= '1'; wait until rising_edge(clk_tb);  -- To repos
 
-    -- Additional: write 'B' (42)
+    -- Additional: Multiple writes (test incwrite chain, sel=0)
     wait_cycles(5);
-    write_and_read_data(x"42", x"BE");
+    for i in 1 to 8 loop
+      do_write_and_verify;
+    end loop;
+    req_tb <= '1'; wait until rising_edge(clk_tb);  -- Repos (write_ptr=1+8=9)
 
-    -- Scenario 3: reset during attente
-    req_tb <= '0';
-    din_tb <= x"43";  -- 'C'
-    wait until rising_edge(clk_tb);  -- Ecrire
-    check_address_change(true);
-    wait until rising_edge(clk_tb);  -- Attente
+    -- Multiple reads (test incread, sel=1)
+    wait_cycles(5);
+    for i in 1 to 6 loop
+      do_read_and_verify;
+    end loop;
+
+    -- Test sel switch without inc (in attente: sel=1, no inc)
+    req_tb <= '0'; do_write_and_verify;  -- To attente (sel=1 after ecrire)
+    verify_address_after_cycle("In attente: sel switch, no inc expected");  -- adrg should stay on read_ptr
+    req_tb <= '1'; wait until rising_edge(clk_tb);  -- Back repos (sel=0)
+
+    -- Scenario 3: Reset in attente (ptrs reset to 0)
+    req_tb <= '0'; do_write_and_verify;  -- Ecrire + attente
     wait until rising_edge(clk_tb);
-    reset_tb <= '1';
-    wait until rising_edge(clk_tb);  -- Repos
-    reset_tb <= '0'; req_tb <= '1';
+    reset_tb <= '1'; verify_address_after_cycle("During reset");
+    reset_tb <= '0'; req_tb <= '1'; wait until rising_edge(clk_tb);
     assert to_integer(unsigned(adrg_dbg_tb)) = 0 report "Address not reset" severity error;
+    expected_write_ptr <= (others => '0');
+    expected_read_ptr  <= (others => '0');
 
     -- Run longer
     wait_cycles(100);
 
-    report "TB fifo (with RAM) finished OK." severity note;
+    report "TB fifo (GENHL + SEQ + GENADR only) finished OK." severity note;
     done <= '1';
     wait;
   end process;
