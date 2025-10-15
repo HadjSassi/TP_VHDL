@@ -16,7 +16,7 @@ entity FIFO is
     HL    : out std_logic;
     dout  : out std_logic_vector(7 downto 0);
 
-    -- debug (prev)
+    -- debug (GENHL / GENADR / SEQ)
     enread_dbg   : out std_logic;
     enwrite_dbg  : out std_logic;
     adrg_dbg     : out std_logic_vector(3 downto 0);
@@ -29,7 +29,7 @@ entity FIFO is
     incwrite_dbg : out std_logic;
     incread_dbg  : out std_logic;
 
-    -- NEW: fast/slow outputs (also exposed for TB)
+    -- fast/slow (exposed)
     fast         : out std_logic;
     slow         : out std_logic
   );
@@ -39,19 +39,23 @@ architecture rtl of FIFO is
   -- GENHL
   signal enread_s, enwrite_s : std_logic;
 
-  -- SEQ outputs
+  -- SEQ
   signal rw_n_s, oe_s, incwrite_s, incread_s, selread_s, cs_n_s : std_logic;
 
-  -- Address generator
+  -- GENADR
   signal adrg_s : std_logic_vector(3 downto 0);  -- M=4
+
+  -- REG + C2
+  signal din_reg_s : std_logic_vector(7 downto 0);
+  signal din_c2_s  : std_logic_vector(7 downto 0);
 
   -- RAM
   signal dout_s : std_logic_vector(7 downto 0);
 
-  -- fast/slow
+  -- FAST/SLOW
   signal fast_s, slow_s : std_logic;
 begin
-  -- ENREAD/ENWRITE generator (200-cycle window)
+  -- GENHL
   u_genhl : GENHL
     port map (
       CLK     => clk,
@@ -60,7 +64,7 @@ begin
       ENWRITE => enwrite_s
     );
 
-  -- FSM (Moore)
+  -- SEQ (Moore)
   u_seq : entity work.seq(archi_moore)
     port map (
       clk      => clk,
@@ -90,7 +94,25 @@ begin
       adrg     => adrg_s
     );
 
-  -- RAM
+  -- Input register (with setup/hold checks via CHECK_PKG)
+  u_reg : reg_n
+    generic map ( N => 8 )
+    port map (
+      reset => reset,
+      clk   => clk,
+      ent   => din,
+      sort  => din_reg_s
+    );
+
+  -- Two's complement of registered input
+  u_c2 : complement_a_2
+    generic map ( N => 8 )
+    port map (
+      nombre => din_reg_s,
+      sortie => din_c2_s
+    );
+
+  -- RAM gets the complemented value
   u_ram : ram
     generic map ( M => 4, N => 8 )
     port map (
@@ -99,11 +121,11 @@ begin
       rw_n => rw_n_s,
       oe   => oe_s,
       adr  => adrg_s,
-      din  => din,
+      din  => din_c2_s,
       dout => dout_s
     );
 
-  -- Fast/Slow occupancy
+  -- Fast/Slow
   u_fastslow : fastslow
     generic map ( M => 4 )
     port map (
@@ -120,7 +142,7 @@ begin
   fast <= fast_s;
   slow <= slow_s;
 
-  -- Debug outputs
+  -- Debug
   enread_dbg   <= enread_s;
   enwrite_dbg  <= enwrite_s;
   adrg_dbg     <= adrg_s;
@@ -132,4 +154,3 @@ begin
   incwrite_dbg <= incwrite_s;
   incread_dbg  <= incread_s;
 end architecture rtl;
-
