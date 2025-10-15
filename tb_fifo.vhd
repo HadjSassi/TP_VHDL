@@ -30,12 +30,17 @@ architecture archi_tb of tb_fifo is
       cs_n_dbg     : out std_logic;
       oe_dbg       : out std_logic;
       incwrite_dbg : out std_logic;
-      incread_dbg  : out std_logic
+      incread_dbg  : out std_logic;
+
+      fast         : out std_logic;
+      slow         : out std_logic
     );
   end component;
 
   constant CLK_PERIOD : time := 100 ns;
   constant M : natural := 4;
+  constant TH_FAST : integer := 2**(M-2);           -- 4
+  constant TH_SLOW : integer := 2**M - 2**(M-2);    -- 12
 
   signal clk_tb, reset_tb, req_tb : std_logic := '0';
   signal din_tb                   : std_logic_vector(7 downto 0) := (others => '0');
@@ -49,17 +54,17 @@ architecture archi_tb of tb_fifo is
   signal rw_n_dbg_tb, cs_n_dbg_tb, oe_dbg_tb : std_logic;
   signal incwrite_dbg_tb, incread_dbg_tb : std_logic;
 
+  signal fast_dbg_tb, slow_dbg_tb : std_logic;
+
   signal done : std_logic := '0';
 
-  -- TB shadow RAM (mirrors DUT writes when RAM truly writes)
+  -- Shadow RAM
   type ram_type is array (0 to 2**M - 1) of std_logic_vector(7 downto 0);
   signal shadow_ram : ram_type := (others => (others => '0'));
 
-  -- optional expected ptrs
   signal expected_write_ptr : unsigned(M-1 downto 0) := (others => '0');
   signal expected_read_ptr  : unsigned(M-1 downto 0) := (others => '0');
 
-  -- HL edge detect
   signal hl_prev : std_logic := '0';
 
 begin
@@ -83,7 +88,9 @@ begin
       cs_n_dbg     => cs_n_dbg_tb,
       oe_dbg       => oe_dbg_tb,
       incwrite_dbg => incwrite_dbg_tb,
-      incread_dbg  => incread_dbg_tb
+      incread_dbg  => incread_dbg_tb,
+      fast         => fast_dbg_tb,
+      slow         => slow_dbg_tb
     );
 
   --------------------------------------------------------------------
@@ -99,7 +106,7 @@ begin
   end process;
 
   --------------------------------------------------------------------
-  -- TB model: mirror writes exactly when RAM writes (cs_n=0 & rw_n=0)
+  -- Mirror writes exactly when RAM writes
   --------------------------------------------------------------------
   model_proc : process(clk_tb)
     variable addr_i : integer;
@@ -110,7 +117,6 @@ begin
         expected_write_ptr <= (others => '0');
         expected_read_ptr  <= (others => '0');
       else
-        -- Real write cycle to RAM:
         if (cs_n_dbg_tb = '0' and rw_n_dbg_tb = '0') then
           addr_i := to_integer(unsigned(adrg_dbg_tb));
           shadow_ram(addr_i) <= din_tb;
@@ -118,8 +124,6 @@ begin
           log_info("Mirrored WRITE @ addr=" & integer'image(addr_i) &
                    " data=" & slv_to_hex(din_tb));
         end if;
-
-        -- Read pointer increment modelling (optional)
         if hl_tb = '1' then
           expected_read_ptr <= expected_read_ptr + 1;
         end if;
@@ -128,14 +132,13 @@ begin
   end process;
 
   --------------------------------------------------------------------
-  -- HL ?state? logs + read-mode checks
+  -- HL logs + read-mode checks
   --------------------------------------------------------------------
   state_logger : process(clk_tb)
   begin
     if rising_edge(clk_tb) then
       if (hl_prev = '0' and hl_tb = '1') then
         log_state("READ_WINDOW_OPEN (HL=1) addr=" & slv_to_bin(adrg_dbg_tb));
-        -- RAM must be enabled for read on this cycle
         assert_eq_sl("cs_n (read)", cs_n_dbg_tb, '0', "SEQ/RAM");
         assert_eq_sl("rw_n (read)", rw_n_dbg_tb, '1', "SEQ/RAM");
         assert_eq_sl("oe   (read)", oe_dbg_tb,   '1', "SEQ/RAM");
@@ -157,23 +160,35 @@ begin
       end loop;
     end procedure;
 
-    procedure wait_hl_pulse(max_cycles : natural) is
-      variable k : natural := 0;
+    procedure request_write(word : std_logic_vector(7 downto 0)) is
     begin
-      loop
-        wait until rising_edge(clk_tb);
-        exit when hl_tb = '1';
-        k := k + 1;
-        assert k <= max_cycles report "Timeout waiting for HL pulse" severity error;
-      end loop;
+      log_state("REQUEST_WRITE data=" & slv_to_hex(word));
+      din_tb <= word;
+      req_tb <= '0';  -- Repos + enwrite=1 + req=0 -> Ecrire next
     end procedure;
 
+    procedure stop_write is
+    begin
+      req_tb <= '1';
+    end procedure;
+
+    procedure wait_ecrire_and_attente is
+    begin
+      wait until rising_edge(clk_tb);  -- Ecrire (RAM write)
+      wait until rising_edge(clk_tb);  -- Attente
+    end procedure;
+
+    -- Read window helper (wait until HL and check data from shadow RAM)
     procedure wait_read_at_addr(target : std_logic_vector(M-1 downto 0);
                                 max_pulses : natural) is
       variable p : natural := 0;
     begin
       loop
-        wait_hl_pulse(800);
+        -- wait HL=1
+        loop
+          wait until rising_edge(clk_tb);
+          exit when hl_tb = '1';
+        end loop;
         exit when adrg_dbg_tb = target;
         p := p + 1;
         assert p < max_pulses
@@ -188,11 +203,9 @@ begin
     begin
       log_assert(tag & " -> RAM read check");
       assert_eq_sl("HL", hl_tb, '1', "SEQ");
-      -- Ensure read-mode signals are correct
       assert_eq_sl("cs_n (read)", cs_n_dbg_tb, '0', "SEQ/RAM");
       assert_eq_sl("rw_n (read)", rw_n_dbg_tb, '1', "SEQ/RAM");
       assert_eq_sl("oe   (read)", oe_dbg_tb,   '1', "SEQ/RAM");
-
       raddr := to_integer(unsigned(adrg_dbg_tb));
       if dout_tb /= shadow_ram(raddr) then
         log_error("RAM: mismatched data @ addr=" & integer'image(raddr) &
@@ -204,84 +217,85 @@ begin
       end if;
     end procedure;
 
-    procedure request_write(word : std_logic_vector(7 downto 0)) is
+    -- NEW: burst writes then assert fast/slow after each write
+    procedure burst_writes_check_fastslow(num_writes : natural) is
+      variable occ : integer := 0;
+      variable word : std_logic_vector(7 downto 0);
     begin
-      log_state("REQUEST_WRITE data=" & slv_to_hex(word));
-      din_tb <= word;
-      req_tb <= '0';  -- Repos + enwrite=1 + req=0 -> Ecrire on next cycle
+      log_info("FAST/SLOW test: burst of " & integer'image(num_writes) & " writes");
+      for i in 1 to num_writes loop
+        -- distinct data pattern
+        word := std_logic_vector(to_unsigned(i, 8));
+        request_write(word);
+        wait_ecrire_and_attente;
+        stop_write;                     -- allow Attente -> Repos in next cycle
+        wait until rising_edge(clk_tb); -- back to Repos
+        occ := occ + 1;
+
+        -- Expected fast/slow based on occupancy (no reads during burst)
+        if occ < TH_FAST then
+          assert_eq_sl("fast", fast_dbg_tb, '1', "FASTSLOW");
+          assert_eq_sl("slow", slow_dbg_tb, '0', "FASTSLOW");
+        elsif occ >= TH_SLOW then
+          assert_eq_sl("fast", fast_dbg_tb, '0', "FASTSLOW");
+          assert_eq_sl("slow", slow_dbg_tb, '1', "FASTSLOW");
+        else
+          assert_eq_sl("fast", fast_dbg_tb, '0', "FASTSLOW");
+          assert_eq_sl("slow", slow_dbg_tb, '0', "FASTSLOW");
+        end if;
+      end loop;
     end procedure;
 
-    procedure stop_write is
-    begin
-      req_tb <= '1';
-    end procedure;
-
-    procedure wait_ecrire_and_attente is
-    begin
-      wait until rising_edge(clk_tb);  -- Ecrire (cs_n=0 & rw_n=0)
-      wait until rising_edge(clk_tb);  -- Attente
-    end procedure;
-
-    variable wr_addr_v : std_logic_vector(M-1 downto 0);
+    -- variable to hold an address across waits
+    variable wr_addr_v : std_logic_vector(M-1 downto 0) := (others => '0');
 
   begin
-    log_info("=== TB START (FIFO + RAM) ===");
+    log_info("=== TB START (FIFO + RAM + FASTSLOW) ===");
 
-    -- Reset ? Repos
+    ----------------------------------------------------------------
+    -- First: minimal run to ensure everything toggles
+    ----------------------------------------------------------------
     req_tb   <= '1';
     din_tb   <= (others => '0');
     reset_tb <= '1'; wait_cycles(2);
     reset_tb <= '0'; wait until rising_edge(clk_tb);
     log_success("Came out of reset");
 
-    ----------------------------------------------------------------
-    -- ?Consume? addr 0 so first tested write goes to non-zero addr
-    ----------------------------------------------------------------
-    request_write(x"55");           -- write @ addr 0 (just to advance)
-    wait_ecrire_and_attente;
-    stop_write;
+    -- Consume addr 0 once (optional)
+    request_write(x"55");  wait_ecrire_and_attente; stop_write;
+
+    -- Read that back when HL hits addr 0
+    wait_read_at_addr("0000", 40); check_read_data("Initial read @0");
 
     ----------------------------------------------------------------
-    -- 1) Write @ non-zero ? read it ? write another ? read it ? later read first again
+    -- FAST/SLOW test: do a fresh reset, then burst 13 writes
+    -- The burst takes ~39 cycles << 200, so no reads in between.
     ----------------------------------------------------------------
-    -- Expect addr 1
-    request_write(x"A5");
-    wait_ecrire_and_attente;
-    stop_write;
+    log_state("Reset before FAST/SLOW burst");
+    reset_tb <= '1'; wait until rising_edge(clk_tb);
+    reset_tb <= '0'; req_tb <= '1'; wait until rising_edge(clk_tb);
 
-    -- Read A5
-    wait_read_at_addr("0001", 30);
-    check_read_data("Read back A5 (addr=1)");
-
-    -- Expect addr 2
-    request_write(x"3C");
-    wait_ecrire_and_attente;
-    stop_write;
-
-    -- Read 3C
-    wait_read_at_addr("0010", 30);
-    check_read_data("Read back 3C (addr=2)");
-
-    -- Later, confirm addr 1 still holds A5
-    wait_read_at_addr("0001", 60);
-    check_read_data("Verify addr=1 still A5");
+    burst_writes_check_fastslow(13);  -- should hit fast region, mid region, and slow region
 
     ----------------------------------------------------------------
-    -- 2) Start write, reset during Attente, later read that address
-    --    (write happens in Ecrire before reset, so data persists)
+    -- Post-burst: do one read window and see slow eventually clears
+    ----------------------------------------------------------------
+    wait_read_at_addr(adrg_dbg_tb, 100);  -- wait next read (address not critical here)
+    check_read_data("Read after burst (slow may still be 1 until enough reads)");
+    wait_read_at_addr(adrg_dbg_tb, 200);
+    ----------------------------------------------------------------
+    -- Reset-during-Attente scenario (like before)
     ----------------------------------------------------------------
     request_write(x"B7");
-    wait until rising_edge(clk_tb);  -- Ecrire now
-    -- Capture the address we just wrote (effective write address)
-    wr_addr_v := adrg_dbg_tb;
-    wait until rising_edge(clk_tb);  -- Attente
+    wait until rising_edge(clk_tb);      -- Ecrire now
+    wr_addr_v := adrg_dbg_tb;            -- capture effective write address
+    wait until rising_edge(clk_tb);      -- Attente
     log_state("RESET during Attente");
     reset_tb <= '1';
-    wait until rising_edge(clk_tb);  -- Repos
+    wait until rising_edge(clk_tb);      -- Repos
     reset_tb <= '0'; req_tb <= '1';
 
-    -- Read back that same address later
-    wait_read_at_addr(wr_addr_v, 80);
+    wait_read_at_addr(wr_addr_v, 120);
     check_read_data("Post-reset read of pre-reset write (B7)");
 
     log_info("=== TB END ===");

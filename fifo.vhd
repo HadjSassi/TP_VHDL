@@ -16,7 +16,7 @@ entity FIFO is
     HL    : out std_logic;
     dout  : out std_logic_vector(7 downto 0);
 
-    -- previous debug
+    -- debug (prev)
     enread_dbg   : out std_logic;
     enwrite_dbg  : out std_logic;
     adrg_dbg     : out std_logic_vector(3 downto 0);
@@ -27,7 +27,11 @@ entity FIFO is
     cs_n_dbg     : out std_logic;
     oe_dbg       : out std_logic;
     incwrite_dbg : out std_logic;
-    incread_dbg  : out std_logic
+    incread_dbg  : out std_logic;
+
+    -- NEW: fast/slow outputs (also exposed for TB)
+    fast         : out std_logic;
+    slow         : out std_logic
   );
 end entity FIFO;
 
@@ -39,10 +43,13 @@ architecture rtl of FIFO is
   signal rw_n_s, oe_s, incwrite_s, incread_s, selread_s, cs_n_s : std_logic;
 
   -- Address generator
-  signal adrg_s : std_logic_vector(3 downto 0);  -- M=4 (16 entries)
+  signal adrg_s : std_logic_vector(3 downto 0);  -- M=4
 
   -- RAM
   signal dout_s : std_logic_vector(7 downto 0);
+
+  -- fast/slow
+  signal fast_s, slow_s : std_logic;
 begin
   -- ENREAD/ENWRITE generator (200-cycle window)
   u_genhl : GENHL
@@ -53,7 +60,7 @@ begin
       ENWRITE => enwrite_s
     );
 
-  -- FSM (Moore by default)
+  -- FSM (Moore)
   u_seq : entity work.seq(archi_moore)
     port map (
       clk      => clk,
@@ -96,8 +103,22 @@ begin
       dout => dout_s
     );
 
-  -- Data output
+  -- Fast/Slow occupancy
+  u_fastslow : fastslow
+    generic map ( M => 4 )
+    port map (
+      Reset    => reset,
+      CLK      => clk,
+      incread  => incread_s,
+      incwrite => incwrite_s,
+      fast     => fast_s,
+      slow     => slow_s
+    );
+
+  -- Outputs
   dout <= dout_s;
+  fast <= fast_s;
+  slow <= slow_s;
 
   -- Debug outputs
   enread_dbg   <= enread_s;
