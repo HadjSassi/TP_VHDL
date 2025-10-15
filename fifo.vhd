@@ -3,39 +3,48 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 library work;
-use work.elfifo_pkg.all; 
+use work.elfifo_pkg.all;
 
 entity FIFO is
-    port(
-        clk : in std_logic;
-        reset: in std_logic;
-        req: in std_logic;
-        din : in std_logic_vector(7 downto 0);  -- Data input (unused without RAM)
+  port(
+    clk   : in  std_logic;
+    reset : in  std_logic;
+    req   : in  std_logic;
+    din   : in  std_logic_vector(7 downto 0);
 
-        ack: out std_logic;
-        HL: out std_logic;
-        dout : out std_logic_vector(7 downto 0);  -- Always Z without RAM
-        
-        --genhl dbg
-        enread_dbg  : out std_logic;
-        enwrite_dbg : out std_logic;
-        -- genadr dbg
-        adrg_dbg    : out std_logic_vector(3 downto 0);
-        selread_dbg : out std_logic  -- Added for verification
-    );
+    ack   : out std_logic;
+    HL    : out std_logic;
+    dout  : out std_logic_vector(7 downto 0);
+
+    -- previous debug
+    enread_dbg   : out std_logic;
+    enwrite_dbg  : out std_logic;
+    adrg_dbg     : out std_logic_vector(3 downto 0);
+    selread_dbg  : out std_logic;
+
+    -- RAM control debug
+    rw_n_dbg     : out std_logic;
+    cs_n_dbg     : out std_logic;
+    oe_dbg       : out std_logic;
+    incwrite_dbg : out std_logic;
+    incread_dbg  : out std_logic
+  );
 end entity FIFO;
 
-architecture rtl of fifo is
-  signal enread_s, enwrite_s : std_logic;
-  -- seq outputs
-  signal rw_n_s, oe_s, incwrite_s, incread_s, selread_s, cs_n_s : std_logic;
-  -- genadr signal
-  signal adrg_s : std_logic_vector(3 downto 0);  -- M=4 for 16 words
-begin
-  -- dout always Z without RAM
-  dout <= (others => 'Z');
-
+architecture rtl of FIFO is
   -- GENHL
+  signal enread_s, enwrite_s : std_logic;
+
+  -- SEQ outputs
+  signal rw_n_s, oe_s, incwrite_s, incread_s, selread_s, cs_n_s : std_logic;
+
+  -- Address generator
+  signal adrg_s : std_logic_vector(3 downto 0);  -- M=4 (16 entries)
+
+  -- RAM
+  signal dout_s : std_logic_vector(7 downto 0);
+begin
+  -- ENREAD/ENWRITE generator (200-cycle window)
   u_genhl : GENHL
     port map (
       CLK     => clk,
@@ -44,7 +53,7 @@ begin
       ENWRITE => enwrite_s
     );
 
-  -- SEQ (change here if moore or mealy)
+  -- FSM (Moore by default)
   u_seq : entity work.seq(archi_moore)
     port map (
       clk      => clk,
@@ -57,16 +66,14 @@ begin
       oe       => oe_s,
       incwrite => incwrite_s,
       incread  => incread_s,
-      hl       => hl,
+      hl       => HL,
       selread  => selread_s,
       cs_n     => cs_n_s
     );
 
-  -- GENADR
+  -- Address generator
   u_genadr : genadr
-    generic map (
-      M => 4
-    )
+    generic map ( M => 4 )
     port map (
       reset    => reset,
       clk      => clk,
@@ -76,8 +83,32 @@ begin
       adrg     => adrg_s
     );
 
+  -- RAM
+  u_ram : ram
+    generic map ( M => 4, N => 8 )
+    port map (
+      clk  => clk,
+      cs_n => cs_n_s,
+      rw_n => rw_n_s,
+      oe   => oe_s,
+      adr  => adrg_s,
+      din  => din,
+      dout => dout_s
+    );
+
+  -- Data output
+  dout <= dout_s;
+
+  -- Debug outputs
   enread_dbg   <= enread_s;
   enwrite_dbg  <= enwrite_s;
   adrg_dbg     <= adrg_s;
-  selread_dbg  <= selread_s;  -- Debug for selread
-end architecture;
+  selread_dbg  <= selread_s;
+
+  rw_n_dbg     <= rw_n_s;
+  cs_n_dbg     <= cs_n_s;
+  oe_dbg       <= oe_s;
+  incwrite_dbg <= incwrite_s;
+  incread_dbg  <= incread_s;
+end architecture rtl;
+
