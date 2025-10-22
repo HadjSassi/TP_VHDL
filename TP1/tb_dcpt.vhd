@@ -113,7 +113,7 @@ begin
     wait for 8*CLK_PERIOD;
 
     -- end test
-	report "Testbench fini sans erreurs." severity note;
+	report "Testbench dcpt_m fini sans erreurs." severity note;
 	assert false report "Erreur. Testbench fini." severity failure;
 	wait;
   end process;
